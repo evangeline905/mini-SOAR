@@ -1,4 +1,4 @@
-# Morpheus-Lite (Mini SOAR Demo)
+# mini-SOAR
 
 A tiny, config-driven SOAR-like engine for interview demos.
 
@@ -26,7 +26,7 @@ python start_web.py
 
 ## Structure
 ```
-morpheus-lite/
+mini-SOAR/
 ├─ requirements.txt
 ├─ alerts.json
 ├─ config/rules.yaml
