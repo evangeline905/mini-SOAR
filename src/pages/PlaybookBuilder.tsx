@@ -1538,7 +1538,7 @@ function PlaybookTemplateWindow({ instanceYaml }) {
             <div className="flex items-center justify-between mb-3">
                 <div>
                     <h3 className="text-lg font-semibold text-gray-800">Playbook Template</h3>
-                    <p className="text-sm text-gray-500 mt-1">Template automatically generated from instance YAML</p>
+                    <p className="text-sm text-gray-500 mt-1">Automatically generated from instance YAML</p>
                 </div>
                 <button
                     onClick={handleCopyTemplate}
