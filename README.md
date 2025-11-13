@@ -53,6 +53,56 @@ python start_web.py
 ```
 Then open http://127.0.0.1:8001 in your browser.
 
+## Deployment
+
+### Railway Deployment
+
+This project is configured for easy deployment on [Railway](https://railway.app/).
+
+#### Prerequisites
+- A Railway account
+- GitHub repository connected to Railway
+
+#### Deployment Steps
+
+1. **Push your code to GitHub** (if not already done)
+   ```bash
+   git push origin main
+   ```
+
+2. **Connect to Railway**:
+   - Go to [Railway Dashboard](https://railway.app/dashboard)
+   - Click "New Project"
+   - Select "Deploy from GitHub repo"
+   - Choose your repository
+
+3. **Railway will automatically**:
+   - Detect Python from `requirements.txt`
+   - Use the `railway.toml` configuration
+   - Build and deploy your application
+   - Provide a public URL (e.g., `https://your-app.up.railway.app`)
+
+4. **Access your application**:
+   - Railway provides a public URL after deployment
+   - The FastAPI app will be available at the root URL
+   - All routes (`/`, `/builder`, `/splunk-lab`, `/api/*`) will work automatically
+
+#### Configuration Files
+
+- **`railway.toml`**: Contains deployment configuration
+  - Builder: Nixpacks (auto-detected)
+  - Start command: `uvicorn src.web:app --host 0.0.0.0 --port $PORT`
+  - Railway automatically provides the `$PORT` environment variable
+
+- **`requirements.txt`**: Python dependencies (already configured)
+
+#### Environment Variables
+
+Railway automatically provides:
+- `$PORT`: Port number for the application (required)
+
+No additional environment variables are needed for basic deployment.
+
 ## Web UI Features
 
 ### Visual Playbook Builder
@@ -181,6 +231,7 @@ steps:
 ```
 mini-SOAR/
 ├─ requirements.txt          # Python dependencies
+├─ railway.toml              # Railway deployment configuration
 ├─ start_web.py              # Web UI launcher (port 8001)
 ├─ config/
 │  ├─ rules.yaml             # Rule definitions (YAML)
