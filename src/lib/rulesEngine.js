@@ -1,5 +1,6 @@
 /**
  * Simple rule evaluator for normalized alerts
+ * Supports new format with conditions.all/operator/value
  * @param {Object} normalized - Normalized alert object
  * @param {Array} rules - Array of rule objects
  * @returns {Object} Object with logs array and matches array
@@ -10,34 +11,27 @@ function evaluateRules(normalized, rules) {
     
     // Iterate through all rules
     for (const rule of rules) {
-        const conditions = rule.if || {};
-        let matched = true;
+        const conditions = rule.conditions || {};
+        let matched = false;
         
-        // Check type match
-        if (conditions.type !== undefined) {
-            if (normalized.type !== conditions.type) {
-                matched = false;
+        // Support conditions.all (all conditions must match)
+        if (conditions.all && Array.isArray(conditions.all)) {
+            matched = true;
+            for (const condition of conditions.all) {
+                if (!evaluateCondition(condition, normalized)) {
+                    matched = false;
+                    break;
+                }
             }
         }
-        
-        // Check severity match (support both severity and severity_equals)
-        if (matched && (conditions.severity_equals !== undefined || conditions.severity !== undefined)) {
-            const severityCondition = conditions.severity_equals !== undefined 
-                ? conditions.severity_equals 
-                : conditions.severity;
-            if (normalized.severity !== severityCondition) {
-                matched = false;
-            }
-        }
-        
-        // Check event_count greater than condition (support both event_count_greater_than and count_greater_than)
-        if (matched && (conditions.event_count_greater_than !== undefined || conditions.count_greater_than !== undefined)) {
-            const alertCount = normalized.event_count || 0;
-            const threshold = conditions.event_count_greater_than !== undefined
-                ? conditions.event_count_greater_than
-                : conditions.count_greater_than;
-            if (alertCount <= threshold) {
-                matched = false;
+        // Support conditions.any (at least one condition must match)
+        else if (conditions.any && Array.isArray(conditions.any)) {
+            matched = false;
+            for (const condition of conditions.any) {
+                if (evaluateCondition(condition, normalized)) {
+                    matched = true;
+                    break;
+                }
             }
         }
         
@@ -46,29 +40,29 @@ function evaluateRules(normalized, rules) {
             matches.push(rule);
             logs.push(`📘 Matched rule: ${rule.name}`);
             
-            // Log actions from the 'then' array
-            // Support both formats:
-            // Old: { "action": "firewall_block_ip", "params": {...} }
-            // New: { "firewall_block_ip": { "params": {...} } }
-            if (rule.then && Array.isArray(rule.then)) {
-                for (const actionStep of rule.then) {
+            // Log actions from the 'actions' array
+            if (rule.actions && Array.isArray(rule.actions)) {
+                for (const actionStep of rule.actions) {
                     let actionName, params;
                     
-                    // Check new format (action name as key)
-                    if (actionStep.action) {
-                        // Old format
+                    if (typeof actionStep === 'string') {
+                        // Simple format: action: "firewall.block_ip"
+                        actionName = actionStep;
+                        params = {};
+                    } else if (actionStep.action) {
+                        // Object format: { action: "firewall.block_ip", params: {...} }
                         actionName = actionStep.action;
                         params = actionStep.params || {};
                     } else {
-                        // New format - extract action name from object keys
+                        // Legacy format - extract action name from object keys
                         actionName = Object.keys(actionStep)[0];
                         params = actionStep[actionName]?.params || {};
                     }
                     
                     // Extract relevant parameter value for logging
                     let paramValue = null;
-                    if (actionName === 'firewall_block_ip' && params.ip_field) {
-                        paramValue = normalized[params.ip_field] || normalized.src_ip;
+                    if (actionName === 'firewall.block_ip' && params.ip) {
+                        paramValue = normalized[params.ip] || normalized.src_ip;
                     } else if ((actionName === 'edr_isolate_host' || actionName === 'isolate_host') && params.host_field) {
                         paramValue = normalized[params.host_field] || normalized.machine;
                     }
@@ -90,6 +84,75 @@ function evaluateRules(normalized, rules) {
     }
     
     return { logs, matches };
+}
+
+/**
+ * Evaluate a single condition against normalized alert
+ * @param {Object} condition - Condition object with field, operator, value
+ * @param {Object} normalized - Normalized alert object
+ * @returns {boolean} True if condition matches
+ */
+function evaluateCondition(condition, normalized) {
+    const field = condition.field || '';
+    const operator = condition.operator || '';
+    const value = condition.value;
+    
+    // Extract field value from normalized alert (support nested paths like alert.type)
+    let alertValue;
+    if (field.startsWith('alert.')) {
+        const fieldPath = field.replace('alert.', '').split('.');
+        alertValue = normalized;
+        for (const part of fieldPath) {
+            if (alertValue && typeof alertValue === 'object' && part in alertValue) {
+                alertValue = alertValue[part];
+            } else {
+                alertValue = undefined;
+                break;
+            }
+        }
+    } else {
+        alertValue = normalized[field];
+    }
+    
+    // Apply operator
+    switch (operator) {
+        case 'equals':
+            return alertValue === value;
+        case 'greater_than':
+            try {
+                return parseFloat(alertValue) > parseFloat(value);
+            } catch (e) {
+                return false;
+            }
+        case 'less_than':
+            try {
+                return parseFloat(alertValue) < parseFloat(value);
+            } catch (e) {
+                return false;
+            }
+        case 'greater_than_or_equal':
+            try {
+                return parseFloat(alertValue) >= parseFloat(value);
+            } catch (e) {
+                return false;
+            }
+        case 'less_than_or_equal':
+            try {
+                return parseFloat(alertValue) <= parseFloat(value);
+            } catch (e) {
+                return false;
+            }
+        case 'contains':
+            if (typeof alertValue === 'string' && typeof value === 'string') {
+                return alertValue.includes(value);
+            }
+            return false;
+        case 'not_equals':
+            return alertValue !== value;
+        default:
+            // Unknown operator, default to False
+            return false;
+    }
 }
 
 /**
@@ -124,4 +187,3 @@ export { evaluateRules, loadRulesFromJson };
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { evaluateRules, loadRulesFromJson };
 }
-

@@ -332,9 +332,10 @@ async def get_editor():
         </div>
         
         <div class="tabs">
+            <button class="tab" onclick="window.location.href='/builder'" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%); color: white;">Visual Playbook Builder</button>
+            <button class="tab" onclick="window.location.href='/splunk-lab'" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white;">Splunk Normalizer Lab</button>
             <button class="tab active" onclick="switchTab('edit')">Edit Playbook</button>
             <button class="tab" onclick="switchTab('view')">View Playbook</button>
-            <button class="tab" onclick="window.location.href='/splunk-lab'" style="background: linear-gradient(135deg, #28a745 0%, #20c997 100%); color: white;">Splunk Normalizer Lab</button>
         </div>
         
         <div class="content">
@@ -461,11 +462,11 @@ async def get_editor():
                         <div class="stat-label">Total Rules</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-value">${data.json.rules.filter(r => r.if).length}</div>
+                        <div class="stat-value">${data.json.rules.filter(r => r.conditions).length}</div>
                         <div class="stat-label">Conditional Rules</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-value">${data.json.rules.filter(r => r.then).length}</div>
+                        <div class="stat-value">${data.json.rules.filter(r => r.actions && r.actions.length > 0).length}</div>
                         <div class="stat-label">Action Rules</div>
                     </div>
                 `;
@@ -479,14 +480,14 @@ async def get_editor():
                         const ruleCard = document.createElement('div');
                         ruleCard.className = 'rule-card';
                         
-                        let ifContent = 'None';
-                        if (rule.if) {
-                            ifContent = JSON.stringify(rule.if, null, 2);
+                        let conditionsContent = 'None';
+                        if (rule.conditions) {
+                            conditionsContent = JSON.stringify(rule.conditions, null, 2);
                         }
                         
-                        let thenContent = 'None';
-                        if (rule.then && rule.then.length > 0) {
-                            thenContent = JSON.stringify(rule.then, null, 2);
+                        let actionsContent = 'None';
+                        if (rule.actions && rule.actions.length > 0) {
+                            actionsContent = JSON.stringify(rule.actions, null, 2);
                         }
                         
                         let mitreContent = 'None';
@@ -497,12 +498,12 @@ async def get_editor():
                         ruleCard.innerHTML = `
                             <div class="rule-name">Rule ${index + 1}: ${rule.name || 'Unnamed'}</div>
                             <div class="rule-section">
-                                <div class="rule-section-title">Condition (if):</div>
-                                <div class="rule-section-content">${ifContent}</div>
+                                <div class="rule-section-title">Conditions:</div>
+                                <div class="rule-section-content">${conditionsContent}</div>
                             </div>
                             <div class="rule-section">
-                                <div class="rule-section-title">Action (then):</div>
-                                <div class="rule-section-content">${thenContent}</div>
+                                <div class="rule-section-title">Actions:</div>
+                                <div class="rule-section-content">${actionsContent}</div>
                             </div>
                             ${mitreContent !== 'None' ? `
                             <div class="rule-section">
@@ -558,6 +559,14 @@ async def get_playbook():
     try:
         playbook = load_playbook()
         
+        # Ensure playbook has rules field
+        if not isinstance(playbook, dict):
+            playbook = {"rules": []}
+        if "rules" not in playbook:
+            playbook["rules"] = []
+        if not isinstance(playbook["rules"], list):
+            playbook["rules"] = []
+        
         # Read raw YAML content
         yaml_content = ""
         if RULES_PATH.exists():
@@ -580,7 +589,9 @@ async def save_playbook_api(request: Dict[str, Any]):
     if not yaml_content:
         raise HTTPException(status_code=400, detail="YAML content is required")
     
-    return save_playbook(yaml_content)
+    # Call synchronous save_playbook function and return result
+    result = save_playbook(yaml_content)
+    return JSONResponse(content=result)
 
 @app.get("/config/rules.json")
 async def get_rules_json():
@@ -589,6 +600,346 @@ async def get_rules_json():
     if not rules_json_path.exists():
         raise HTTPException(status_code=404, detail="rules.json not found")
     return FileResponse(str(rules_json_path))
+
+def evaluate_expression_safe(expression: str, steps: Dict[str, Any], enrich_config: Dict[str, Any] = None) -> bool:
+    """
+    Safely evaluate expression with limited operators and variables.
+    Only supports: any_malicious, max_score, score + &&, ||, >=, ==
+    
+    Args:
+        expression: Expression string with ${steps.xxx} variables
+        steps: Dictionary containing enrich results
+        enrich_config: Dictionary indicating which enrich steps are enabled
+        
+    Returns:
+        bool: Evaluation result
+        
+    Raises:
+        ValueError: If expression evaluation fails or variables are missing
+    """
+    try:
+        import re
+        if not expression or not isinstance(expression, str):
+            raise ValueError('Expression must be a non-empty string')
+        
+        evaluated = expression.strip()
+        enrich_config = enrich_config or {}
+        
+        # Step 1: Remove outer ${} wrapper if present
+        wrapped_match = re.match(r'^\$\{(.+)\}$', evaluated)
+        if wrapped_match:
+            evaluated = wrapped_match.group(1)
+            # Check if inner expression has bare steps. references (without ${})
+            # If so, convert them to ${steps.xxx} format
+            if re.search(r'\bsteps\.\w+', evaluated) and not re.search(r'\$\{steps\.', evaluated):
+                evaluated = re.sub(r'\bsteps\.([\w.]+)', r'${steps.\1}', evaluated)
+        
+        # Step 2: Replace ${steps.xxx} with actual values
+        variable_pattern = r'\$\{steps\.([\w.]+)\}'
+        missing_vars = []
+        missing_enrich_steps = []
+        
+        def replace_var(match):
+            path = match.group(1)
+            parts = path.split('.')
+            value = steps
+            
+            # Navigate through the path
+            for part in parts:
+                if value and isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    # Variable not found
+                    missing_vars.append(match.group(0))
+                    
+                    # Check if this is because the enrich step is not enabled
+                    enrich_step = parts[0]  # e.g., 'vt_hash', 'vt_url', 'abuseipdb'
+                    if enrich_step == 'vt_hash' and not enrich_config.get('vt_hash', False):
+                        missing_enrich_steps.append('VirusTotal Hash lookup')
+                    elif enrich_step == 'vt_url' and not enrich_config.get('vt_url', False):
+                        missing_enrich_steps.append('VirusTotal URL reputation')
+                    elif enrich_step == 'abuseipdb' and not enrich_config.get('abuseipdb_geoip', False):
+                        missing_enrich_steps.append('AbuseIPDB / GeoIP')
+                    
+                    return match.group(0)  # Return original if not found
+            
+            # Convert to appropriate type for comparison
+            if isinstance(value, bool):
+                return 'True' if value else 'False'
+            elif isinstance(value, (int, float)):
+                return str(value)
+            elif value is None:
+                return 'None'
+            else:
+                return f'"{value}"'
+        
+        evaluated = re.sub(variable_pattern, replace_var, evaluated)
+        
+        # Step 3: Check for unresolved variables
+        remaining_vars = re.findall(r'\$\{steps\.[\w.]+\}', evaluated)
+        if remaining_vars:
+            enrich_msg = ''
+            if missing_enrich_steps:
+                enrich_msg = f'\n\nPlease enable the following enrich steps: {", ".join(missing_enrich_steps)}'
+            raise ValueError(
+                f'Unresolved variables found: {", ".join(remaining_vars)}. '
+                f'These variables may not be available in the test data.{enrich_msg}'
+            )
+        
+        # Simple parser: only allow safe operations
+        # Replace && with and, || with or for Python evaluation
+        evaluated = evaluated.replace('&&', ' and ')
+        evaluated = evaluated.replace('||', ' or ')
+        evaluated = evaluated.replace('==', '==')
+        evaluated = evaluated.replace('>=', '>=')
+        evaluated = evaluated.replace('<=', '<=')
+        evaluated = evaluated.replace('>', '>')
+        evaluated = evaluated.replace('<', '<')
+        evaluated = evaluated.replace('!=', '!=')
+        
+        # Evaluate in restricted context
+        # Only allow comparison operations
+        allowed_names = {
+            'True': True,
+            'False': False,
+            'true': True,
+            'false': False,
+        }
+        
+        # Use eval with restricted globals and locals
+        result = eval(evaluated, {"__builtins__": {}}, allowed_names)
+        return bool(result)
+    except Exception as e:
+        raise ValueError(f"Expression evaluation failed: {str(e)}")
+
+@app.post("/api/playbooks/dryrun")
+async def dryrun_playbook(request: Dict[str, Any]):
+    """
+    Dry-run endpoint for testing playbooks.
+    Uses mock enrichment functions or real API based on environment.
+    """
+    import os
+    import sys
+    from pathlib import Path
+    
+    # Add backend directory to path if it exists
+    backend_dir = Path(__file__).resolve().parents[1] / "backend"
+    if backend_dir.exists():
+        sys.path.insert(0, str(backend_dir.parent))
+    
+    # Check if we should use real API (controlled by environment variable)
+    use_real_api = os.getenv("USE_REAL_ENRICHMENT_API", "false").lower() == "true"
+    
+    config = request.get("config", {})
+    enrich = config.get("enrich", {})
+    collect = config.get("collect", {})
+    condition = config.get("condition", {})
+    actions = config.get("actions", {})
+    
+    mock_steps = {}
+    execution_log = []
+    
+    # Step 1: collect_normalize
+    execution_log.append("[1] collect_normalize: Collecting and normalizing alert data")
+    
+    # If testing expression directly, check which variables are referenced and generate mock data for them
+    expression = condition.get("expression", "")
+    if expression:
+        import re
+        variable_pattern = r'\$\{steps\.([\w.]+)\}'
+        referenced_vars = set()
+        for match in re.finditer(variable_pattern, expression):
+            var_path = match.group(1)
+            parts = var_path.split('.')
+            if len(parts) > 0:
+                referenced_vars.add(parts[0])  # e.g., 'vt_hash', 'vt_url', 'abuseipdb'
+        
+        # Auto-enable enrich steps that are referenced in the expression
+        if 'vt_hash' in referenced_vars and not enrich.get("vt_hash", False):
+            enrich["vt_hash"] = True
+        if 'vt_url' in referenced_vars and not enrich.get("vt_url", False):
+            enrich["vt_url"] = True
+        if 'abuseipdb' in referenced_vars and not enrich.get("abuseipdb_geoip", False):
+            enrich["abuseipdb_geoip"] = True
+    
+    # Generate enrich results based on flags
+    step_num = 2
+    
+    if enrich.get("vt_hash", False):
+        if use_real_api:
+            # TODO: Replace with real API call
+            # from backend.real_enrichment import vt_hash_lookup
+            # hashes = collect.get("attachment_hashes", "").split(",") if collect.get("attachment_hashes") else []
+            # mock_steps["vt_hash"] = vt_hash_lookup(hashes)
+            pass
+        else:
+            # Use mock function
+            try:
+                from backend.mock_enrichment import vt_hash_result
+                hashes = collect.get("attachment_hashes", "").split(",") if collect.get("attachment_hashes") else []
+                mock_steps["vt_hash"] = vt_hash_result(hashes)
+                execution_log.append(
+                    f"[{step_num}] vt_hash: VirusTotal hash lookup - "
+                    f"any_malicious: {mock_steps['vt_hash']['any_malicious']}, "
+                    f"max_score: {mock_steps['vt_hash']['max_score']}, "
+                    f"total_lookups: {mock_steps['vt_hash']['total_lookups']}"
+                )
+                step_num += 1
+            except ImportError:
+                # Fallback if import fails
+                mock_steps["vt_hash"] = {
+                    "any_malicious": True,
+                    "max_score": 85,
+                    "total_lookups": 0
+                }
+                execution_log.append(f"[{step_num}] vt_hash: VirusTotal hash lookup (fallback)")
+                step_num += 1
+    
+    if enrich.get("vt_url", False):
+        if use_real_api:
+            # TODO: Replace with real API call
+            # from backend.real_enrichment import vt_url_lookup
+            # urls = collect.get("urls", "").split(",") if collect.get("urls") else []
+            # mock_steps["vt_url"] = vt_url_lookup(urls)
+            pass
+        else:
+            # Use mock function
+            try:
+                from backend.mock_enrichment import vt_url_result
+                urls = collect.get("urls", "").split(",") if collect.get("urls") else []
+                mock_steps["vt_url"] = vt_url_result(urls)
+                execution_log.append(
+                    f"[{step_num}] vt_url: VirusTotal URL reputation - "
+                    f"any_malicious: {mock_steps['vt_url']['any_malicious']}, "
+                    f"max_score: {mock_steps['vt_url']['max_score']}, "
+                    f"urls_checked: {mock_steps['vt_url']['urls_checked']}"
+                )
+                step_num += 1
+            except ImportError:
+                # Fallback if import fails
+                mock_steps["vt_url"] = {
+                    "any_malicious": False,
+                    "max_score": 65,
+                    "urls_checked": 0
+                }
+                execution_log.append(f"[{step_num}] vt_url: VirusTotal URL reputation (fallback)")
+                step_num += 1
+    
+    if enrich.get("abuseipdb_geoip", False):
+        if use_real_api:
+            # TODO: Replace with real API call
+            # from backend.real_enrichment import abuseipdb_lookup
+            # ip = collect.get("src_ip", "")
+            # mock_steps["abuseipdb"] = abuseipdb_lookup(ip)
+            pass
+        else:
+            # Use mock function
+            try:
+                from backend.mock_enrichment import abuseipdb_result
+                ip = collect.get("src_ip", "0.0.0.0")
+                mock_steps["abuseipdb"] = abuseipdb_result(ip)
+                execution_log.append(
+                    f"[{step_num}] abuseipdb: AbuseIPDB GeoIP lookup - "
+                    f"score: {mock_steps['abuseipdb']['score']}, "
+                    f"country: {mock_steps['abuseipdb']['country']}, "
+                    f"asn: {mock_steps['abuseipdb']['asn']}, "
+                    f"ip: {mock_steps['abuseipdb']['ip']}"
+                )
+                step_num += 1
+            except ImportError:
+                # Fallback if import fails
+                mock_steps["abuseipdb"] = {
+                    "score": 90,
+                    "country": "US",
+                    "asn": "AS15169",
+                    "ip": collect.get("src_ip", "0.0.0.0")
+                }
+                execution_log.append(f"[{step_num}] abuseipdb: AbuseIPDB GeoIP lookup (fallback)")
+                step_num += 1
+    
+    # Step: evaluate condition
+    condition_result = False
+    branch_taken = "low"
+    expression = condition.get("expression", "")
+    
+    if expression:
+        try:
+            condition_result = evaluate_expression_safe(expression, mock_steps, enrich)
+            branch_taken = "high" if condition_result else "low"
+            execution_log.append(
+                f"[{step_num}] evaluate: Condition evaluation - "
+                f"Result: {'TRUE' if condition_result else 'FALSE'}, "
+                f"Branch taken: {branch_taken.upper()}"
+            )
+            step_num += 1
+        except Exception as e:
+            execution_log.append(f"[{step_num}] evaluate: Condition evaluation failed - {str(e)}")
+            step_num += 1
+    
+    # Step: action_group execution
+    branch_actions = actions.get("trueActions", []) if condition_result else actions.get("falseActions", [])
+    if branch_actions:
+        execution_log.append(f"[{step_num}] {branch_taken}: Executing {len(branch_actions)} action(s)")
+        for action in branch_actions:
+            action_name = action.get("action", "unknown")
+            action_params = action.get("input", {})
+            params_str = ", ".join([f"{k}: {v}" for k, v in action_params.items()])
+            execution_log.append(f"  - {action_name} ({params_str})")
+    
+    return JSONResponse(content={
+        "steps": mock_steps,
+        "conditionResult": condition_result,
+        "branchTaken": branch_taken,
+        "executionLog": execution_log,
+        "message": "Dry-run completed successfully"
+    })
+
+# In-memory storage for playbooks (in production, use database)
+_playbook_storage = {}
+_current_playbook_id = None
+
+@app.post("/api/playbooks")
+async def save_playbook_to_storage(request: Dict[str, Any]):
+    """
+    Save playbook to storage.
+    Returns the playbook ID.
+    """
+    import uuid
+    
+    playbook = request.get("playbook", {})
+    if not playbook:
+        raise HTTPException(status_code=400, detail="Playbook data is required")
+    
+    # Generate ID if not provided
+    playbook_id = playbook.get("id") or str(uuid.uuid4())
+    playbook["id"] = playbook_id
+    
+    # Save to storage
+    _playbook_storage[playbook_id] = playbook
+    global _current_playbook_id
+    _current_playbook_id = playbook_id
+    
+    return JSONResponse(content={
+        "id": playbook_id,
+        "message": "Playbook saved successfully"
+    })
+
+@app.get("/api/playbooks/current")
+async def get_current_playbook():
+    """
+    Get the current saved playbook.
+    Returns 404 if no playbook is saved.
+    """
+    global _current_playbook_id
+    
+    if _current_playbook_id is None or _current_playbook_id not in _playbook_storage:
+        raise HTTPException(status_code=404, detail="No playbook found")
+    
+    playbook = _playbook_storage[_current_playbook_id]
+    return JSONResponse(content={
+        "playbook": playbook,
+        "id": _current_playbook_id
+    })
 
 @app.get("/splunk-lab", response_class=HTMLResponse)
 async def get_splunk_lab():
@@ -757,6 +1108,134 @@ async def get_splunk_lab():
                 const root = ReactDOM.createRoot(rootElement);
                 console.log('Root created, rendering component...');
                 root.render(React.createElement(PlaybookPage));
+                console.log('Component rendered successfully');
+                rootRendered = true;
+            }} catch (error) {{
+                console.error('Error rendering React app:', error);
+                console.error('Error name:', error.name);
+                console.error('Error message:', error.message);
+                console.error('Error stack:', error.stack);
+                const rootElement = document.getElementById('root');
+                if (rootElement) {{
+                    rootElement.innerHTML = '<div style="padding: 20px; color: red;">Error: ' + error.message + '<br>Check console for details.</div>';
+                }}
+            }}
+        }}
+        
+        // Set up DOMContentLoaded listener
+        console.log('Setting up DOMContentLoaded listener...');
+        window.addEventListener('DOMContentLoaded', function() {{
+            console.log('DOMContentLoaded fired!');
+            renderApp();
+        }});
+        
+        // Also try immediate execution if DOM is already loaded
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {{
+            console.log('DOM already loaded, rendering immediately...');
+            renderApp();
+        }}
+    </script>
+</body>
+</html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.get("/builder", response_class=HTMLResponse)
+async def get_builder():
+    """Return Visual Playbook Builder React page"""
+    pages_dir = ROOT / "src" / "pages"
+    
+    # Read PlaybookBuilder component file
+    playbook_builder_raw = (pages_dir / "PlaybookBuilder.tsx").read_text(encoding="utf-8")
+    
+    # Remove import and export statements from TSX file
+    # Remove all React import statements - we'll declare hooks once at the top level
+    playbook_builder = playbook_builder_raw
+    playbook_builder = re.sub(r"import\s*{\s*useState[^}]*}\s*from\s*['\"]react['\"];?\s*\n?", "", playbook_builder)
+    playbook_builder = re.sub(r"import\s*.*\s*from\s*['\"].*['\"];?\s*\n?", "", playbook_builder)
+    playbook_builder = playbook_builder.replace('export default PlaybookBuilder;', '')
+    
+    html_content = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Playbook Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }}
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        console.log('Script starting...');
+        
+        // Check if React is loaded
+        if (typeof React === 'undefined') {{
+            console.error('React is not loaded');
+            document.getElementById('root').innerHTML = '<div style="padding: 20px; color: red;">Error: React library not loaded</div>';
+        }} else {{
+            console.log('React loaded:', typeof React);
+        }}
+        
+        if (typeof ReactDOM === 'undefined') {{
+            console.error('ReactDOM is not loaded');
+            document.getElementById('root').innerHTML = '<div style="padding: 20px; color: red;">Error: ReactDOM library not loaded</div>';
+        }} else {{
+            console.log('ReactDOM loaded:', typeof ReactDOM);
+        }}
+        
+        // Import React hooks once at the top level (shared by all components)
+        const {{ useState, useEffect }} = React;
+        console.log('Hooks extracted:', typeof useState, typeof useEffect);
+        
+        // Include React component (define it globally)
+        {playbook_builder}
+        console.log('PlaybookBuilder loaded:', typeof PlaybookBuilder);
+        
+        // Render the app once DOM is ready (prevent multiple renders)
+        let rootRendered = false;
+        
+        function renderApp() {{
+            if (rootRendered) {{
+                console.log('App already rendered, skipping...');
+                return;
+            }}
+            
+            try {{
+                console.log('Attempting to render...');
+                const rootElement = document.getElementById('root');
+                if (!rootElement) {{
+                    console.error('Root element not found');
+                    return;
+                }}
+                
+                // Check if PlaybookBuilder is defined
+                if (typeof PlaybookBuilder === 'undefined') {{
+                    console.error('PlaybookBuilder is not defined');
+                    console.log('Available globals:', Object.keys(window).filter(k => k.includes('Builder') || k.includes('Page')));
+                    rootElement.innerHTML = '<div style="padding: 20px; color: red;">Error: PlaybookBuilder component not found. Check console for details.</div>';
+                    return;
+                }}
+                
+                console.log('PlaybookBuilder found, creating root...');
+                console.log('PlaybookBuilder type:', typeof PlaybookBuilder);
+                const root = ReactDOM.createRoot(rootElement);
+                console.log('Root created, rendering component...');
+                root.render(React.createElement(PlaybookBuilder));
                 console.log('Component rendered successfully');
                 rootRendered = true;
             }} catch (error) {{

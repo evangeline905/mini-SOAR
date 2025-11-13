@@ -1,22 +1,32 @@
 rules:
-- name: brute_force_block
-  if:
-    type: Brute Force
-    count_greater_than: 5
-  then:
-  - action: firewall_block_ip
-    params:
-      ip_field: src_ip
-  mitre:
-  - T1110
-- name: high_severity_malware_isolate
-  if:
-    type: Malware
-    severity_equals: High
-  then:
-  - action: edr_isolate_host
-    params:
-      host_field: machine
-  mitre:
-  - T1059.001
-  - T1105
+  - name: brute_force
+    conditions:
+      all:
+        - field: alert.type
+          operator: equals
+          value: Brute Force
+        - field: alert.event_count
+          operator: greater_than
+          value: 10
+    actions:
+      - action: firewall.block_ip
+    mitre:
+      - T1110
+  - name: malware_quarantine
+    conditions:
+      all:
+        - field: alert.type
+          operator: equals
+          value: Malware
+        - field: alert.severity
+          operator: equals
+          value: High
+    actions:
+      - action: isolate_host
+        params:
+          host_field: machine
+      - action: create_ticket
+        params:
+          priority: high
+    mitre:
+      - T1204

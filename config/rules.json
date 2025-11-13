@@ -1,19 +1,63 @@
-[
-  {
-    "name": "brute_force_block",
-    "description": "Block IP if many failed login events detected",
-    "if": { "type": "Brute Force", "event_count_greater_than": 10 },
-    "then": [{ "firewall_block_ip": { "params": { "ip_field": "src_ip" } } }],
-    "mitre": ["T1110"]
-  },
-  {
-    "name": "malware_quarantine",
-    "description": "Quarantine host when malware artifact observed",
-    "if": { "type": "Malware", "severity": "High" },
-    "then": [
-      { "isolate_host": { "params": { "host_field": "machine" } } },
-      { "create_ticket": { "params": { "priority": "high" } } }
-    ],
-    "mitre": ["T1204"]
-  }
-]
+{
+  "rules": [
+    {
+      "name": "brute_force",
+      "conditions": {
+        "all": [
+          {
+            "field": "alert.type",
+            "operator": "equals",
+            "value": "Brute Force"
+          },
+          {
+            "field": "alert.event_count",
+            "operator": "greater_than",
+            "value": 10
+          }
+        ]
+      },
+      "actions": [
+        {
+          "action": "firewall.block_ip"
+        }
+      ],
+      "mitre": [
+        "T1110"
+      ]
+    },
+    {
+      "name": "malware_quarantine",
+      "conditions": {
+        "all": [
+          {
+            "field": "alert.type",
+            "operator": "equals",
+            "value": "Malware"
+          },
+          {
+            "field": "alert.severity",
+            "operator": "equals",
+            "value": "High"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "action": "isolate_host",
+          "params": {
+            "host_field": "machine"
+          }
+        },
+        {
+          "action": "create_ticket",
+          "params": {
+            "priority": "high"
+          }
+        }
+      ],
+      "mitre": [
+        "T1204"
+      ]
+    }
+  ]
+}

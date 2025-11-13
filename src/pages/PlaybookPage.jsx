@@ -92,24 +92,63 @@ function PlaybookPage() {
     };
 
     return (
-        <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '20px',
-            padding: '20px',
-            maxWidth: '1400px',
-            margin: '0 auto'
-        }}>
-            {/* Left Column */}
-            <div>
-                <h2 style={{
-                    marginBottom: '20px',
-                    fontSize: '1.5em',
-                    fontWeight: 600,
-                    color: '#333'
-                }}>
-                    Splunk Alert Input
-                </h2>
+        <div>
+            {/* Back Button */}
+            <div style={{
+                marginBottom: '20px'
+            }}>
+                <button
+                    onClick={() => window.location.href = '/'}
+                    style={{
+                        padding: '8px 12px',
+                        border: 'none',
+                        borderRadius: '6px',
+                        backgroundColor: '#6c757d',
+                        color: 'white',
+                        fontSize: '18px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '36px',
+                        height: '36px',
+                        transition: 'all 0.3s',
+                        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+                    }}
+                    onMouseOver={(e) => {
+                        e.target.style.backgroundColor = '#5a6268';
+                        e.target.style.transform = 'translateY(-2px)';
+                        e.target.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+                    }}
+                    onMouseOut={(e) => {
+                        e.target.style.backgroundColor = '#6c757d';
+                        e.target.style.transform = 'translateY(0)';
+                        e.target.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1)';
+                    }}
+                >
+                    ←
+                </button>
+            </div>
+
+            <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '20px',
+                padding: '20px',
+                maxWidth: '1400px',
+                margin: '0 auto'
+            }}>
+                {/* Left Column */}
+                <div>
+                    <h2 style={{
+                        marginBottom: '20px',
+                        fontSize: '1.5em',
+                        fontWeight: 600,
+                        color: '#333'
+                    }}>
+                        Splunk Alert Input
+                    </h2>
                 
                 {/* Sample Alerts Section */}
                 <div style={{
@@ -142,7 +181,7 @@ function PlaybookPage() {
                             e.target.style.backgroundColor = '#f0f0f0';
                         }}
                     >
-                        <span>📋 Sample Alerts</span>
+                        <span>Sample Alerts</span>
                         <span style={{
                             fontSize: '0.9em',
                             transition: 'transform 0.3s',
@@ -183,7 +222,7 @@ function PlaybookPage() {
                                     e.target.style.color = '#667eea';
                                 }}
                             >
-                                🔓 Brute Force Attack (15 events)
+                                Brute Force Attack (15 events)
                             </button>
                             
                             <button
@@ -209,7 +248,7 @@ function PlaybookPage() {
                                     e.target.style.color = '#dc3545';
                                 }}
                             >
-                                🦠 Malware Detection (High Severity)
+                                Malware Detection (High Severity)
                             </button>
                             
                             <button
@@ -235,7 +274,7 @@ function PlaybookPage() {
                                     e.target.style.color = '#856404';
                                 }}
                             >
-                                ⚠️ Suspicious Activity (5 events)
+                                Suspicious Activity (5 events)
                             </button>
                         </div>
                     )}
@@ -322,6 +361,7 @@ function PlaybookPage() {
                     </h3>
                     <LogConsole lines={logs} />
                 </div>
+            </div>
             </div>
         </div>
     );
