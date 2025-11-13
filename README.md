@@ -239,22 +239,6 @@ mini-SOAR/
 2. The **Runbook** panel shows the generated YAML
 3. View execution logs and step results in the dry-run section
 
-## API Endpoints
-
-### REST API (port 8000)
-
-- `POST /api/playbooks/dryrun`: Execute playbook dry-run
-- `POST /api/playbooks`: Save playbook to storage
-- `GET /api/playbook`: Get current playbook (YAML and JSON)
-
-### Web UI Routes (port 8001)
-
-- `/`: Home page with navigation
-- `/builder`: Visual Playbook Builder
-- `/splunk-lab`: Splunk Normalizer Lab
-- `/edit`: Edit Playbook (YAML editor)
-- `/view`: View Playbook (read-only)
-
 ## Development
 
 ### Adding New Actions
