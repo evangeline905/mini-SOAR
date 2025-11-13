@@ -1,6 +1,6 @@
 # mini-SOAR
 
-A tiny, config-driven SOAR-like engine for interview demos and security automation.
+A tiny, config-driven SOAR-like engine for security automation demo. https://mini-soar-practice.up.railway.app
 
 ## Features
 
